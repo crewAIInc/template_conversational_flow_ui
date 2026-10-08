@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
+import { attachWebSocketRelay } from './websocket-relay.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 if (existsSync(resolve(root, '.env'))) process.loadEnvFile(resolve(root, '.env'));
@@ -133,6 +134,8 @@ const server = createServer(async (req, res) => {
     res.end(req.method === 'HEAD' ? undefined : contents);
   } catch { res.writeHead(404); res.end('Not found. Run npm run build before npm start.'); }
 });
+
+attachWebSocketRelay(server, { port, base, token });
 
 server.on('error', error => {
   console.error(`Could not start Flow Chat (${error.code}). Check that port ${port} is available and local listeners are permitted.`);

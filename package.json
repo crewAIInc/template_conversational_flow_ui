@@ -16,7 +16,8 @@
     "@assistant-ui/react": "0.15.25",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "react-markdown": "10.1.0"
+    "react-markdown": "10.1.0",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "esbuild": "0.27.7",

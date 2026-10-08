@@ -5,7 +5,7 @@ import { Readable, Writable } from 'node:stream';
 import { once } from 'node:events';
 
 // Exercise the actual HTTP handler without opening TCP ports in restricted sessions.
-test('SSE HTTP handler flushes frames before upstream EOF and validates message/auth boundaries', async t => {
+test('HTTP handler validates message/auth boundaries and keeps deployment configuration server-side', async t => {
   const originalFetch = globalThis.fetch;
   const originalListen = Server.prototype.listen;
   const originalArgv = process.argv;
@@ -17,9 +17,8 @@ test('SSE HTTP handler flushes frames before upstream EOF and validates message/
   Server.prototype.listen = function () { server = this; return this; };
   globalThis.fetch = async (url, options) => {
     calls.push({ url: String(url), options });
-    if (String(url).includes('/stream/events')) {
-      return new Response(new ReadableStream({ start(controller) { streamController = controller; } }), { headers: { 'Content-Type': 'text/event-stream' } });
-    }
+    if (String(url).includes('/stream/events')) return new Response(new ReadableStream({ start(controller) { streamController = controller; } }), { headers: { 'Content-Type': 'text/event-stream' } });
+    if (String(url).endsWith('/inspect')) return Response.json({ flow: { chat: { conversational: true, handle_turn: true } }, secret: 'test-only-secret' });
     return Response.json({ status: 'queued' });
   };
   t.after(() => {
@@ -38,28 +37,28 @@ test('SSE HTTP handler flushes frames before upstream EOF and validates message/
     return res;
   }
   const id = '11111111-2222-3333-4444-555555555555';
-  const res = request(`/api/chat/${id}/stream/events?events=token&last_event_id=123-4`);
-  await once(res, 'headers');
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.headers['Content-Type'], 'text/event-stream');
-  assert.equal(res.headers['X-Accel-Buffering'], 'no');
-  const frame = 'data: {"id":"123-5","type":"token","data":{"content":"hello ✓"}}\n\n';
-  const chunk = once(res, 'chunk');
-  streamController.enqueue(new TextEncoder().encode(frame));
-  await chunk;
-  assert.equal(Buffer.concat(res.parts).toString(), frame);
-  assert.equal(res.writableFinished, false); // The first token arrived while upstream remained open.
-  const finished = once(res, 'finish');
-  streamController.close(); await finished;
-  assert.match(calls[0].url, /events=\*&last_event_id=123-4$/);
-  assert.equal(calls[0].options.headers.Authorization, 'Bearer test-only-secret');
   const posted = request(`/api/chat/${id}/message`, 'POST', JSON.stringify({ message: 'hi ✓', stream: false, ignored: true }));
   await once(posted, 'finish');
-  assert.deepEqual(JSON.parse(calls[1].options.body), { message: 'hi ✓', stream: true });
+  assert.deepEqual(JSON.parse(calls[0].options.body), { message: 'hi ✓', stream: true });
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer test-only-secret');
   const invalid = request(`/api/chat/${id}/message`, 'POST', '{'); await once(invalid, 'finish');
   assert.equal(invalid.statusCode, 400);
   const denied = request('/api/inspect', 'GET', '', { origin: 'https://untrusted.example' });
   if (!denied.writableFinished) await once(denied, 'finish');
   assert.equal(denied.statusCode, 403);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
+  const inspected = request('/api/inspect'); await once(inspected, 'finish');
+  assert.deepEqual(JSON.parse(Buffer.concat(inspected.parts).toString()), { chat: { conversational: true, handle_turn: true } });
+  const streamed = request(`/api/chat/${id}/stream/events?events=token&last_event_id=123-4`);
+  await once(streamed, 'headers');
+  assert.equal(streamed.headers['Content-Type'], 'text/event-stream');
+  assert.equal(streamed.headers['X-Accel-Buffering'], 'no');
+  const frame = 'data: {"stream_id":"123-5","type":"token","data":{"content":"hello ✓"}}\n\n';
+  const received = once(streamed, 'chunk');
+  streamController.enqueue(new TextEncoder().encode(frame)); await received;
+  assert.equal(Buffer.concat(streamed.parts).toString(), frame);
+  assert.equal(streamed.writableFinished, false);
+  assert.match(calls.at(-1).url, /events=\*&last_event_id=123-4$/);
+  assert.equal(calls.at(-1).options.headers.Authorization, 'Bearer test-only-secret');
+  const completed = once(streamed, 'finish'); streamController.close(); await completed;
 });

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react';
 import Markdown from 'react-markdown';
 import { textDelta } from './stream-text.mjs';
+import { connectChatStream } from './chat-stream.mjs';
 import crewaiLogo from './assets/crewai-logo.png';
 
 const storageKey = 'crewai-flow-sessions';
@@ -124,29 +125,14 @@ export default function App() {
     const turn = { id, message, generation: currentGeneration, previousUsers: messages.filter(m => m.role === 'user').length, terminal: false, retries: 0, sent: false, lastId: '0-0', seen: new Set(), assistant: crypto.randomUUID() };
     active.current = turn;
     setBusy(true);
-    connect(turn);
-  }
-  async function connect(turn) {
-    if (generation.current !== turn.generation || turn.terminal) return;
-    try {
-      if (turn.message && !turn.sent) {
-        setStatus('Queuing turn');
-        // Mark the attempt before sending; an uncertain HTTP result must not resend.
-        turn.sent = true;
-        const queued = await api(`/chat/${turn.id}/message`, 'POST', { message: turn.message, stream: true });
-        if (turn.terminal || generation.current !== turn.generation) return;
-        log('turn_queued', queued);
-      }
-      setStatus(turn.retries ? 'Reconnecting SSE' : 'Connecting SSE');
-      const source = new EventSource(`/api/chat/${turn.id}/stream/events?events=*&last_event_id=${encodeURIComponent(turn.lastId)}`);
-      turn.source = source;
-      source.onopen = () => {
-        if (turn.terminal || generation.current !== turn.generation) { source.close(); return; }
-        setStatus('Connected · SSE');
-        log('sse_connected', { last_event_id: turn.lastId });
-      };
-      source.onmessage = event => {
-        if (turn.terminal || generation.current !== turn.generation) return;
+    connectChatStream(turn, {
+      api, isCurrent: () => generation.current === turn.generation,
+      status: setStatus, log, finish: () => finish(turn),
+      fail: message => {
+        setBusy(false); setReady(false); setStatus('Disconnected'); setError(message);
+        if (turn.message) setDraft(turn.message);
+      },
+      onMessage: event => {
         let frame;
         try { frame = JSON.parse(event.data); }
         catch { log('invalid_frame', event.data); setError('The deployment sent an invalid stream frame.'); return; }
@@ -160,7 +146,7 @@ export default function App() {
         const delta = textDelta(frame, turn);
         if (delta) {
           const { content, replace } = delta;
-          setStatus('Streaming · SSE');
+          setStatus(`Streaming · ${turn.transport}`);
           setMessages(previous => {
             const index = previous.findIndex(m => m.key === turn.assistant);
             if (index < 0) return [...previous, { role: 'assistant', content, key: turn.assistant }];
@@ -170,36 +156,8 @@ export default function App() {
         if (frame.type === 'turn_started') { setStatus('Thinking'); setError(''); }
         if (frame.type === 'turn_completed') finish(turn);
         if (frame.type === 'turn_failed' || frame.type === 'error') finish(turn, errorText(frame.data || frame));
-      };
-      source.onerror = () => {
-        source.close(); // We control reconnects and inspect history before reattaching.
-        recover(turn);
-      };
-    } catch (error) { recover(turn, error.message); }
-  }
-  async function recover(turn, failure) {
-    if (turn.terminal || generation.current !== turn.generation) return;
-    log('sse_disconnected', failure || 'Checking whether the turn is still active.');
-    setStatus('Checking turn');
-    try {
-      await delay(500 * (turn.retries + 1));
-      const history = await api(`/chat/${turn.id}/history`);
-      if (turn.terminal || generation.current !== turn.generation) return;
-      if (!history.active_kickoff_id) {
-        const users = (history.messages || []).filter(m => m.role === 'user');
-        if (!turn.message || (users.length > turn.previousUsers && users.at(-1)?.content === turn.message)) {
-          log('history_synced', 'The turn finished. Final history is authoritative.');
-          return finish(turn);
-        }
-        throw new Error(failure || 'The stream closed before the turn was confirmed. Your message is restored below.');
-      }
-      if (++turn.retries > 3) throw new Error('The SSE stream disconnected repeatedly. Reconnect to attach to the active turn.');
-      connect(turn);
-    } catch (error) {
-      if (generation.current !== turn.generation || turn.terminal) return;
-      turn.terminal = true; setBusy(false); setReady(false); setStatus('Disconnected'); setError(error.message);
-      if (turn.message) setDraft(turn.message);
-    }
+      },
+    });
   }
   async function sendMessage(text) {
     const message = text.trim();
@@ -257,7 +215,7 @@ export default function App() {
             {!messages.length && !busy && <div className="welcome"><h2>How can I help you today?</h2></div>}
             <div className="message-list">
               <ThreadPrimitive.Messages>{({ message }) => <ChatMessage role={message.role} />}</ThreadPrimitive.Messages>
-              {busy && <div className="thinking" role="status"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status === 'Streaming · SSE' ? 'Receiving response' : status === 'Thinking' ? 'Thinking…' : status}</span></div>}
+              {busy && <div className="thinking" role="status"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status.startsWith('Streaming ·') ? 'Receiving response' : status === 'Thinking' ? 'Thinking…' : status}</span></div>}
             </div>
           </ThreadPrimitive.Viewport>
           <div className="composer-area">
