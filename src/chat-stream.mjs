@@ -1,7 +1,7 @@
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // One initial WebSocket attempt plus three retries, then HTTP send + SSE attach.
-export function connectChatStream(turn, { api, isCurrent, status, log, onMessage, finish, fail }) {
+export function connectChatStream(turn, { api, isCurrent, status, log, onMessage, finish, fail, connection }) {
   turn.transport = 'WebSocket';
   const current = () => !turn.terminal && isCurrent();
   function stop(error) {
@@ -23,13 +23,16 @@ export function connectChatStream(turn, { api, isCurrent, status, log, onMessage
       const target = new URL(`/api/chat/${turn.id}/stream${turn.transport === 'SSE' ? '/events' : ''}`, window.location.href);
       target.searchParams.set('events', '*'); target.searchParams.set('last_event_id', turn.lastId);
       if (turn.transport === 'WebSocket') target.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const source = turn.transport === 'SSE' ? new EventSource(target) : new WebSocket(target);
+      const cached = connection?.id === turn.id ? connection.source : null;
+      const reused = turn.transport === 'WebSocket' && Boolean(cached && cached.readyState === WebSocket.OPEN);
+      const source = reused ? cached : turn.transport === 'SSE' ? new EventSource(target) : new WebSocket(target);
+      if (connection && turn.transport === 'WebSocket') { connection.id = turn.id; connection.source = source; }
       turn.source = source;
       const active = () => current() && turn.source === source;
       source.onopen = () => {
         if (!active()) { source.close(); return; }
         status(`Connected · ${turn.transport}`);
-        log(turn.transport === 'SSE' ? 'sse_connected' : 'websocket_connected', { last_event_id: turn.lastId });
+        log(turn.transport === 'SSE' ? 'sse_connected' : reused ? 'websocket_reused' : 'websocket_connected', { last_event_id: turn.lastId });
         if (turn.transport === 'WebSocket' && turn.message && !turn.sent && !turn.attachOnly) {
           turn.sent = true;
           try {
@@ -45,8 +48,11 @@ export function connectChatStream(turn, { api, isCurrent, status, log, onMessage
         else log('websocket_error', 'WebSocket transport failed. Check server logs for the deployment handshake status.');
       };
       if (turn.transport === 'WebSocket') source.onclose = event => {
+        if (connection?.source === source) connection.source = null;
         if (active()) recover(`WebSocket closed (code ${event.code})${event.reason ? ': ' + event.reason : '.'}`);
+        else if (isCurrent()) log('websocket_idle_closed', { code: event.code, reason: event.reason });
       };
+      if (reused) source.onopen();
     } catch (error) { recover(error.message); }
   }
   async function recover(failure) {

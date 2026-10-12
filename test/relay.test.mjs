@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import WebSocket, { WebSocketServer } from 'ws';
 
-test('TCP WebSocket relay sends a turn and receives text before completion with server-only auth', { timeout: 15000 }, async t => {
+test('TCP WebSocket relay streams two turns on one connection with server-only auth', { timeout: 15000 }, async t => {
   const id = '11111111-2222-3333-4444-555555555555';
   const token = 'test-secret-kept-on-server';
   let release;
@@ -13,15 +13,17 @@ test('TCP WebSocket relay sends a turn and receives text before completion with 
   const upstream = createServer((req, res) => res.end('{}'));
   const remote = new WebSocketServer({ server: upstream });
   const clients = [];
+  let connections = 0, turns = 0;
   remote.on('connection', (socket, req) => {
+    connections++;
     assert.equal(req.headers.authorization, `Bearer ${token}`);
     assert.equal(req.url, `/chat/${id}/stream?events=*&last_event_id=123-0`);
     socket.on('message', async raw => {
-      assert.deepEqual(JSON.parse(raw), { message: 'Hello flow', events: '*', lastEventId: '123-0' });
+      turns++;
+      assert.deepEqual(JSON.parse(raw), { message: turns === 1 ? 'Hello flow' : 'Hello again', events: '*', lastEventId: turns === 1 ? '123-0' : '0-0' });
       socket.send(JSON.stringify({ id: '123-1', type: 'token', data: { content: 'Hello ' } }));
       await gate;
       socket.send(JSON.stringify({ id: '123-2', type: 'turn_completed', data: {} }));
-      socket.close();
     });
   });
   const reservation = createServer();
@@ -54,4 +56,15 @@ test('TCP WebSocket relay sends a turn and receives text before completion with 
   const completed = once(client, 'message');
   release();
   assert.equal(JSON.parse((await completed)[0]).type, 'turn_completed');
+  assert.equal(client.readyState, WebSocket.OPEN);
+  const nextText = once(client, 'message');
+  const nextCompleted = new Promise(resolve => client.on('message', raw => {
+    const frame = JSON.parse(raw); if (frame.type === 'turn_completed') resolve(frame);
+  }));
+  client.send(JSON.stringify({ message: 'Hello again', events: '*', lastEventId: '0-0' }));
+  assert.equal(JSON.parse((await nextText)[0]).data.content, 'Hello ');
+  assert.equal((await nextCompleted).type, 'turn_completed');
+  assert.equal(connections, 1);
+  assert.equal(turns, 2);
+  assert.equal(client.readyState, WebSocket.OPEN);
 });

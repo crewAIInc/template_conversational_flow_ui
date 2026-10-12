@@ -29,7 +29,10 @@ export function attachWebSocketRelay(server, { port, base, token }) {
       handshakeTimeout: 20000, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false,
     });
     let client;
-    const stopUpstream = () => { if (upstream.readyState !== WebSocket.CLOSED) upstream.terminate(); };
+    const stopUpstream = () => {
+      if (upstream.readyState === WebSocket.OPEN) upstream.close(1000, 'Client disconnected.');
+      else if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
+    };
     socket.on('close', stopUpstream);
     upstream.on('unexpected-response', (request, response) => {
       console.error(`CrewAI WebSocket handshake failed: HTTP ${response.statusCode}.`);
