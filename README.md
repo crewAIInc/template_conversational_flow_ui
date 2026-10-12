@@ -1,6 +1,6 @@
 # CrewAI Conversational Flow UI Template
 
-A reusable React + [assistant-ui](https://www.assistant-ui.com/docs) chat interface for a deployed CrewAI conversational Flow. Configure your deployment URL and bearer token in `.env`, then run the UI. The template includes conversation history, Markdown responses, incremental text rendering, reconnect handling, and an Events panel with every received frame.
+A reusable React + [assistant-ui](https://www.assistant-ui.com/docs) workspace for a deployed CrewAI conversational Flow. Configure your deployment URL and bearer token in `.env`, then run the UI. A conversation sidebar and central chat keep requests and explanations together. Generated code becomes a compact card in chat and streams into a dedicated code pane with **Copy code** and **Download** actions. Ordinary text replies stay in chat. Close the code pane to widen the conversation, or reopen a code card to inspect it. On mobile, switch between Conversation and Code, with history in the navigation drawer. Events retains every received runtime frame.
 
 Messages, response chunks, and runtime events use CrewAI's [WebSocket API](https://docs-platform.crewai.com/platform/en/guides/conversational-flow-chat#option-b-websocket-attach-or-send). After three WebSocket retries, the UI falls back to [HTTP message + SSE](https://docs-platform.crewai.com/platform/en/guides/conversational-flow-chat#option-a-http-message-sse-attach). HTTP also creates sessions and loads history.
 
@@ -88,6 +88,7 @@ Copy the template source into your own project, install dependencies, and config
 | --- | --- |
 | `src/App.jsx` | Chat layout, branding, suggestions, assistant-ui runtime, and event display |
 | `src/styles.css` | Colors, spacing, and responsive layout |
+| `src/code-artifacts.mjs` | Extract top-level fenced code blocks, including code still streaming |
 | `src/assets/crewai-logo.png` | Top-left CrewAI logo |
 | `src/stream-text.mjs` | Text-frame handling |
 | `src/chat-stream.mjs` | WebSocket retries, SSE fallback, and delivery recovery |
@@ -113,7 +114,7 @@ npm test
 Tests use mock deployment data, not your real token or automation. They cover socket reuse across completed/failed turns, idle closure, three retries before SSE fallback, text chunks, safe React rendering, server-only auth, message validation, event/cursor forwarding, and forwarding text before the upstream turn completes. The TCP relay test needs local listeners. In restricted environments, run:
 
 ```sh
-node --test test/chat-stream.test.mjs test/stream-text.test.mjs test/relay-handler.test.mjs test/websocket-relay.test.mjs test/render.test.mjs
+node --test test/chat-stream.test.mjs test/stream-text.test.mjs test/code-artifacts.test.mjs test/relay-handler.test.mjs test/websocket-relay.test.mjs test/render.test.mjs
 ```
 
 ## Troubleshooting

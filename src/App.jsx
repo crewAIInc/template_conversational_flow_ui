@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react';
 import Markdown from 'react-markdown';
 import { textDelta } from './stream-text.mjs';
 import { connectChatStream } from './chat-stream.mjs';
+import { codeArtifacts, artifactFilename } from './code-artifacts.mjs';
 import crewaiLogo from './assets/crewai-logo.png';
 
 const storageKey = 'crewai-flow-sessions';
@@ -37,6 +38,11 @@ export default function App() {
   const [showActivity, setShowActivity] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [mobilePane, setMobilePane] = useState('intent');
+  const [selectedArtifact, setSelectedArtifact] = useState(null);
+  const [outputOpen, setOutputOpen] = useState(false);
+  const autoArtifactStart = useRef(null);
+  const autoArtifactSeen = useRef(null);
   const active = useRef(null);
   const connection = useRef({});
   const generation = useRef(0);
@@ -49,8 +55,13 @@ export default function App() {
     role: message.role,
     content: [{ type: 'text', text: message.content || '' }],
   }), [session?.id]);
+  const chatMessages = useMemo(() => messages.filter(message => message.role === 'user' || message.role === 'assistant'), [messages]);
+  const artifacts = useMemo(() => chatMessages.flatMap((message, index) => message.role === 'assistant'
+    ? codeArtifacts(message.content).map((artifact, artifactIndex) => ({ ...artifact, id: `${index}:${artifactIndex}`, messageIndex: index, messageId: convertMessage(message, index).id })) : []), [chatMessages, convertMessage]);
+  const currentArtifact = artifacts.find(artifact => artifact.id === selectedArtifact);
+  const paneOpen = outputOpen && Boolean(currentArtifact);
   const runtime = useExternalStoreRuntime({
-    messages: messages.filter(message => message.role === 'user' || message.role === 'assistant'),
+    messages: chatMessages,
     convertMessage, onNew, isRunning: busy, isSendDisabled: !ready,
   });
 
@@ -62,6 +73,14 @@ export default function App() {
   useEffect(() => {
     if (draft) { runtime.thread.composer.setText(draft); setDraft(''); }
   }, [draft, runtime]);
+  useEffect(() => {
+    if (autoArtifactStart.current === null) return;
+    const artifact = artifacts.filter(item => item.messageIndex >= autoArtifactStart.current).at(-1);
+    if (artifact && artifact.id !== autoArtifactSeen.current) {
+      autoArtifactSeen.current = artifact.id;
+      setSelectedArtifact(artifact.id); setOutputOpen(true);
+    }
+  }, [artifacts]);
 
   async function checkDeployment() {
     setStatus('Checking deployment'); setError('');
@@ -89,6 +108,7 @@ export default function App() {
     generation.current++;
     releaseStream();
     setSession(null); setMessages([]); setActivity([]); setDraft(''); setMobileMenu(false);
+    setSelectedArtifact(null); setMobilePane('intent'); setShowActivity(false); setOutputOpen(false); autoArtifactStart.current = null; autoArtifactSeen.current = null;
     if (ready) { setError(''); setStatus('Ready'); }
     runtime.thread.composer.setText('');
   }
@@ -97,6 +117,7 @@ export default function App() {
     releaseStream(item.id);
     if (!preserveDraft) runtime.thread.composer.setText('');
     setSession(item); setMessages([]); setActivity([]); setError(''); setBusy(true); setStatus('Loading history'); setMobileMenu(false);
+    setSelectedArtifact(null); setMobilePane('intent'); setShowActivity(false); setOutputOpen(false); autoArtifactStart.current = null; autoArtifactSeen.current = null;
     try {
       const history = await api(`/chat/${item.id}/history`);
       if (generation.current !== currentGeneration) return;
@@ -172,6 +193,7 @@ export default function App() {
   async function sendMessage(text) {
     const message = text.trim();
     if (!message || busy || !ready) return;
+    setShowActivity(false); autoArtifactStart.current = chatMessages.length; autoArtifactSeen.current = null;
     const currentGeneration = ++generation.current;
     setBusy(true); setError(''); setStatus('Starting session');
     try {
@@ -200,61 +222,102 @@ export default function App() {
     }
   }
 
+  function openArtifact(id) { setSelectedArtifact(id); setOutputOpen(true); setMobilePane('output'); }
+  function closeArtifact() { setOutputOpen(false); setMobilePane('intent'); }
+
   return <AssistantRuntimeProvider runtime={runtime}><div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-    {mobileMenu && <button className="menu-scrim" aria-label="Close navigation" onClick={() => setMobileMenu(false)} />}
+    {mobileMenu && <button className="menu-scrim" aria-label="Dismiss navigation" onClick={() => setMobileMenu(false)} />}
     <aside className={`sidebar ${mobileMenu ? 'is-open' : ''}`} aria-label="Conversations">
-      <div className="sidebar-header"><a className="brand" href="/" aria-label="CrewAI chat home"><img src={crewaiLogo} alt="CrewAI" width="375" height="114" /></a><button className="icon-button collapse-button" aria-label="Collapse sidebar" onClick={() => setSidebarCollapsed(true)}><Icon name="sidebar" /></button></div>
+      <div className="sidebar-header"><a className="brand" href="/" aria-label="CrewAI chat home"><img src={crewaiLogo} alt="CrewAI" width="375" height="114" /></a><button className="icon-button collapse-button" aria-label={mobileMenu ? 'Close navigation' : 'Collapse sidebar'} onClick={() => mobileMenu ? setMobileMenu(false) : setSidebarCollapsed(true)}><Icon name={mobileMenu ? 'close' : 'sidebar'} /></button></div>
       <div className="sidebar-content">
         <button className="new-chat" onClick={freshChat} disabled={busy}><Icon name="plus" /> New thread</button>
-        {!!sessions.length && <div className="sidebar-heading">Recent chats</div>}
-        <nav className="conversation-list">
-          {sessions.map(item => <button key={item.id} className={`conversation ${session?.id === item.id ? 'selected' : ''}`} disabled={busy} onClick={() => openSession(item)}>{item.title}</button>)}
+        <div className="sidebar-heading">Recent chats <span>{sessions.length}</span></div>
+        <nav className="conversation-list" aria-label="Recent chats">
+          {sessions.map(item => <button key={item.id} className={`conversation ${session?.id === item.id ? 'selected' : ''}`} aria-current={session?.id === item.id ? 'true' : undefined} disabled={busy} onClick={() => openSession(item)}><Icon name="chat" /><span>{item.title}</span></button>)}
+          {!sessions.length && <p className="history-empty">Your conversations will appear here after your first request.</p>}
         </nav>
       </div>
-      <div className="sidebar-bottom"><span className={`status-dot ${ready ? 'green' : ''}`} /><span>{ready ? 'CrewAI conversational flow' : 'Deployment unavailable'}</span></div>
+      <div className="sidebar-bottom"><div className="connection-state"><span className={`status-dot ${ready && !error ? 'green' : ''}`} /><span>{ready && !error ? 'Flow connected' : 'Deployment unavailable'}</span></div><span className="connection-caption">CrewAI conversational flow</span>{session && <details className="session-info"><summary>Session details</summary><code>{session.id}</code></details>}</div>
     </aside>
     <main className="workspace">
       <header className="topbar">
         <button className="icon-button menu-button" aria-label="Open navigation" onClick={() => { setSidebarCollapsed(false); setMobileMenu(true); }}><Icon name="sidebar" /></button>
         <h1>{session?.title || 'New chat'}</h1>
-        <button className={`quiet-button ${showActivity ? 'is-active' : ''}`} onClick={() => setShowActivity(!showActivity)} aria-expanded={showActivity}>Events{activity.length ? ` (${activity.length})` : ''}</button>
+        <div className={`workspace-status ${busy ? 'is-running' : ''}`} role="status"><span className={`status-dot ${ready && !error ? 'green' : ''}`} /><span>{status}</span></div>
+        <button className={`quiet-button events-toggle ${showActivity ? 'is-active' : ''}`} aria-expanded={showActivity} onClick={() => { setShowActivity(!showActivity); setMobilePane('intent'); }}>Events{activity.length ? ` (${activity.length})` : ''}</button>
       </header>
-      <div className="workspace-body">
-        <ThreadPrimitive.Root className={`chat-pane ${!messages.length && !busy ? 'empty-thread' : ''}`} aria-label="Flow chat" key={session?.id || 'new-conversation'}>
-          <ThreadPrimitive.Viewport className="transcript" role="log" aria-label="Messages" aria-live="polite" aria-relevant="additions text">
-            {!messages.length && !busy && <div className="welcome"><h2>How can I help you today?</h2></div>}
+      {error && <div className="error-banner" role="alert"><div><strong>Connection interrupted</strong><p>{error}</p></div><button onClick={reconnect} disabled={busy}>Reconnect</button></div>}
+      {paneOpen && <nav className="mobile-panels" aria-label="Workspace panels"><button aria-pressed={mobilePane === 'intent'} onClick={() => setMobilePane('intent')}>Conversation</button><button aria-pressed={mobilePane === 'output'} onClick={() => setMobilePane('output')}>Code</button></nav>}
+      <ThreadPrimitive.Root className={`workspace-body ${paneOpen ? 'has-output' : ''} mobile-${mobilePane}`} aria-label="Flow chat" key={session?.id || 'new-conversation'}>
+        <section className={`chat-pane ${!messages.length && !busy ? 'empty-thread' : ''}`} aria-label="Conversation">
+          {showActivity ? <section className="activity-panel" aria-label="Runtime activity"><div className="activity-header"><h2>Runtime activity</h2><button className="icon-button" aria-label="Close activity" onClick={() => setShowActivity(false)}><Icon name="close" /></button></div><p className="activity-description">Every received frame, including response tokens. Times show when this browser received each event.</p><div className="event-list">{!activity.length && <div className="activity-empty"><h3>No events yet</h3><p>Send a request to see your flow’s live activity.</p></div>}{activity.map(item => <div className="event" key={item.key}><div><strong>{item.type.replaceAll('_', ' ')}</strong><time>{item.time}</time></div>{item.detail && <details><summary>View payload</summary><pre>{typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail, null, 2)}</pre></details>}</div>)}</div></section> : <ThreadPrimitive.Viewport className="transcript" role="log" aria-label="Messages" aria-live="polite" aria-relevant="additions text">
+            {!messages.length && !busy && <div className="welcome"><h2>How can I help you today?</h2><p>Describe what you want to get done. Your flow will take it from there.</p></div>}
             <div className="message-list">
-              <ThreadPrimitive.Messages>{({ message }) => <ChatMessage role={message.role} />}</ThreadPrimitive.Messages>
-              {busy && <div className="thinking" role="status"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status.startsWith('Streaming ·') ? 'Receiving response' : status === 'Thinking' ? 'Thinking…' : status}</span></div>}
+              <ThreadPrimitive.Messages>{({ message }) => <ChatMessage role={message.role} artifacts={artifacts.filter(artifact => artifact.messageId === message.id)} onOpen={openArtifact} />}</ThreadPrimitive.Messages>
+              {busy && <div className="thinking"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status.startsWith('Streaming ·') ? 'Receiving response' : status}</span></div>}
             </div>
-          </ThreadPrimitive.Viewport>
+          </ThreadPrimitive.Viewport>}
           <div className="composer-area">
-            {error && <div className="error-banner" role="alert"><div><strong>Connection interrupted</strong><p>{error}</p></div><button onClick={reconnect} disabled={busy}>Reconnect</button></div>}
             <ThreadPrimitive.ScrollToBottom className="scroll-to-bottom" aria-label="Scroll to latest message"><Icon name="down" /></ThreadPrimitive.ScrollToBottom>
             <ComposerPrimitive.Root className="composer">
               <label htmlFor="message" className="sr-only">Message your flow</label>
-              <ComposerPrimitive.Input id="message" maxLength={32000} rows={2} placeholder="Send a message…" disabled={busy} />
+              <ComposerPrimitive.Input id="message" maxLength={32000} rows={2} placeholder="Describe what you want to get done…" disabled={busy} />
               <div className="composer-bottom"><span>CrewAI Flow</span><ComposerPrimitive.Send className="send-button" aria-label="Send message"><Icon name="up" /></ComposerPrimitive.Send></div>
             </ComposerPrimitive.Root>
             {!messages.length && !busy && <div className="suggestions">
-              {['What can you help me with?', 'Help me think through an idea.', 'Help me make a plan.'].map(prompt => <ThreadPrimitive.Suggestion key={prompt} prompt={prompt} disabled={!ready}>{prompt}</ThreadPrimitive.Suggestion>)}
+              {['What can you help me with?', 'Help me think through an idea.', 'Help me make a plan.'].map(prompt => <ThreadPrimitive.Suggestion key={prompt} prompt={prompt} disabled={!ready}>{prompt}<span aria-hidden="true">↗</span></ThreadPrimitive.Suggestion>)}
             </div>}
             {!!messages.length && <p className="composer-hint">AI responses can make mistakes. Check important information.</p>}
           </div>
-        </ThreadPrimitive.Root>
-        {showActivity && <aside className="activity-panel" aria-label="Runtime activity"><div className="activity-header"><h2>All events ({activity.length})</h2><button className="icon-button" onClick={() => setShowActivity(false)} aria-label="Close activity"><Icon name="close" /></button></div><p className="activity-description">Every received frame, including response tokens. Times show when this browser received each event.</p><div className="stream-status"><span className={`status-dot ${ready && !error ? 'green' : ''}`} />{status}</div>{session && <div className="session-info"><span>Session ID</span><code>{session.id}</code></div>}<div className="event-list">{!activity.length && <div className="activity-empty">Send a message to see your flow’s events.</div>}{activity.map(item => <div className="event" key={item.key}><div><strong>{item.type.replaceAll('_', ' ')}</strong><time>{item.time}</time></div>{item.detail && <details><summary>View payload</summary><pre>{typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail, null, 2)}</pre></details>}</div>)}</div></aside>}
-      </div>
+        </section>
+        {paneOpen && <section className="output-pane" aria-label="Generated code">
+          <CodeArtifact key={currentArtifact.id} artifact={currentArtifact} onClose={closeArtifact} />
+        </section>}
+
+      </ThreadPrimitive.Root>
     </main>
   </div></AssistantRuntimeProvider>;
 }
 
-function ChatMessage({ role }) {
+function ChatMessage({ role, artifacts = [], onOpen }) {
   return <MessagePrimitive.Root className={`message ${role}`}>
     <div className="message-body">
-      <MessagePrimitive.Parts>{({ part }) => part.type === 'text' ? <div className="markdown"><Markdown components={{ a: props => <a {...props} target="_blank" rel="noreferrer" /> }}>{part.text}</Markdown></div> : null}</MessagePrimitive.Parts>
+      <MessagePrimitive.Parts>{({ part }) => part.type === 'text' ? <div className="markdown"><Markdown components={{
+        a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+        pre: ({ node, children }) => {
+          const artifact = artifacts.find(item => item.line === node.position?.start.line);
+          return artifact ? <button className="artifact-card" onClick={() => onOpen(artifact.id)} aria-label={`Open ${artifactFilename(artifact)}`}><span className="artifact-glyph" aria-hidden="true">{'</>'}</span><span className="artifact-card-info"><strong>{artifactFilename(artifact)}</strong><span>{artifact.complete ? `${artifact.code.split('\n').length} lines of code` : 'Streaming code…'}</span></span><span className="artifact-card-open" aria-hidden="true">Open ↗</span></button> : <pre>{children}</pre>;
+        },
+      }}>{part.text}</Markdown></div> : null}</MessagePrimitive.Parts>
       {role === 'assistant' && <div className="message-actions"><ActionBarPrimitive.Root hideWhenRunning autohide="not-last"><ActionBarPrimitive.Copy className="icon-button copy-button" aria-label="Copy response"><span className="copy-icon"><Icon name="copy" /></span><span className="copied-icon"><Icon name="check" /></span></ActionBarPrimitive.Copy></ActionBarPrimitive.Root></div>}
     </div>
   </MessagePrimitive.Root>;
+}
+
+function CodeArtifact({ artifact, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(artifact.code);
+      setCopyError(''); setCopied(true); clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 3000);
+    } catch { setCopyError('Copy failed. Select the code to copy it manually.'); }
+  }
+  function downloadCode() {
+    const url = URL.createObjectURL(new Blob([artifact.code], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = artifactFilename(artifact); link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return <>
+    <header className="response-header"><div><h2>{artifactFilename(artifact)}</h2><p>{artifact.language || 'Code'}{!artifact.complete ? ' · Streaming' : ''}</p></div><button className="icon-button" aria-label="Close code" onClick={onClose}><Icon name="close" /></button></header>
+    <div className="artifact-toolbar"><button className="quiet-button artifact-copy" onClick={copyCode} aria-label="Copy code" disabled={!artifact.code}><Icon name={copied ? 'check' : 'copy'} />{copied ? 'Copied' : 'Copy code'}</button><button className="quiet-button" onClick={downloadCode} disabled={!artifact.complete}>Download</button><span>{artifact.code ? artifact.code.split('\n').length : 0} lines</span></div>
+    {copyError && <p className="artifact-copy-error" role="alert">{copyError}</p>}
+    <div className="artifact-code"><pre><code>{artifact.code}</code></pre></div>
+  </>;
 }
 
 function Icon({ name }) {
