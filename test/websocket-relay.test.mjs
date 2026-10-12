@@ -84,8 +84,9 @@ test('WebSocket relay sends messages, streams all frames, protects auth, and rej
     assert.deepEqual(JSON.parse((await received)[0]), frame);
     assert.equal(client.readyState, WebSocket.OPEN);
   }
-  const closed = once(client, 'close'); client.send('{');
+  const closed = once(client, 'close'), upstreamClosed = once(upstream, 'close'); client.send('{');
   assert.equal((await closed)[0], 1008);
+  assert.equal((await upstreamClosed)[0], 1000, 'Relay must close its upstream connection gracefully');
   const count = requests.length;
   const denied = new WebSocket(`ws://localhost:5199/api/chat/${id}/stream`, { origin: 'https://untrusted.example', perMessageDeflate: false });
   connections.push(denied);

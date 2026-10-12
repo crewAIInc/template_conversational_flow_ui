@@ -61,6 +61,10 @@ The browser calls matching `/api/...` routes on the local server. Native `WebSoc
 
 On connection, the UI sends `{ "message": "...", "events": "*", "lastEventId": "0-0" }` if it has a new message. Otherwise, it attaches to the active turn. The UI makes one initial WebSocket attempt and up to **three retries**, then switches to native `EventSource` for SSE. Events shows `transport_retry`, `sse_fallback`, and `sse_connected` so the switch is visible.
 
+One open WebSocket is retained for the selected session. Completing or failing a turn refreshes history without closing that socket; the next message reuses it and starts with a fresh turn cursor. Events records `websocket_reused` instead of another connection handshake. Selecting a different session, starting a new thread, or leaving the page closes the connection. The relay closes its upstream connection gracefully.
+
+The Enterprise implementation supports multiple turns on one socket and defaults to a five-minute idle timeout between turns (`FLOW_CHAT_WEBSOCKET_IDLE_TIMEOUT_SECONDS`). If the server closes an idle socket, the UI clears it and opens a new one on the next send, without retrying an already completed turn. Older deployments that close after every turn also reconnect on the next send.
+
 Before retrying or switching transports, the UI checks authoritative history. If no message was sent, SSE fallback queues it once over HTTP. If the turn is active, SSE attaches without resending, preserving the event cursor and already displayed text. If the turn has completed, the UI loads history. If delivery is uncertain and history cannot confirm acceptance, the UI restores the draft instead of sending it again automatically.
 
 The UI supports both text formats:
@@ -74,7 +78,7 @@ Each chunk updates the assistant message as received. If both formats arrive in 
 
 The **Events** panel retains every received JSON frame, including text chunks, with the full payload and millisecond receipt time. WebSocket ping/pong control frames are transport messages and do not appear as JSON events. Event logs are held in memory for the current conversation; the sidebar persists only session IDs and titles in this browser. Transcripts stay on CrewAI.
 
-Only one turn runs per session. After a disconnect, the UI checks history and reattaches using the last Redis stream cursor. It never automatically resends a user message. SSE gets up to three recovery attempts; if those fail, use **Reconnect**. Each new turn starts with WebSocket again.
+Only one turn runs per session. After a disconnect during a turn, the UI checks history and reattaches using the last Redis stream cursor. It never automatically resends a user message. SSE gets up to three recovery attempts; if those fail, use **Reconnect**. Each new turn reuses the session WebSocket when it is open; otherwise, it starts a new WebSocket attempt.
 
 ## Reuse and customize
 
@@ -106,7 +110,7 @@ npm start
 npm test
 ```
 
-Tests use mock deployment data, not your real token or automation. They cover text chunks, safe React rendering, server-only auth, message validation, event/cursor forwarding, and forwarding text before the upstream turn completes. The TCP relay test needs local listeners. In restricted environments, run:
+Tests use mock deployment data, not your real token or automation. They cover socket reuse across completed/failed turns, idle closure, three retries before SSE fallback, text chunks, safe React rendering, server-only auth, message validation, event/cursor forwarding, and forwarding text before the upstream turn completes. The TCP relay test needs local listeners. In restricted environments, run:
 
 ```sh
 node --test test/chat-stream.test.mjs test/stream-text.test.mjs test/relay-handler.test.mjs test/websocket-relay.test.mjs test/render.test.mjs
@@ -125,4 +129,4 @@ node --test test/chat-stream.test.mjs test/stream-text.test.mjs test/relay-handl
 | WebSocket closes immediately | Inspect the close code in Events and deployment logs; verify the deployment supports `/chat/{session_id}/stream`. |
 | Text arrives together at completion | Check deployment proxy buffering and the Flow's stream emission. Compare frame timestamps with browser receipt times in Events. |
 
-The local relay forwards WebSocket frames as they arrive. Real-time text also requires the deployed Flow to emit chunks during generation. In a live Chrome test, the UI received 158 text chunks before turn completion, logged 192 event entries, and reconstructed the final response exactly. The first chunk reached the browser about 9 ms after its emission timestamp.
+The local relay forwards WebSocket frames as they arrive. Real-time text also requires the deployed Flow to emit chunks during generation. In a live Chrome test, the UI received 158 text chunks before turn completion, logged 192 event entries, and reconstructed the final response exactly. The first chunk reached the browser about 9 ms after its emission timestamp. A subsequent two-turn Chrome test completed both replies over one WebSocket connection, with `websocket_reused` on the second turn and no disconnect or SSE fallback.

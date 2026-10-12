@@ -8,9 +8,11 @@ function setup(t, history = { messages: [], active_kickoff_id: null }) {
   const sockets = [], streams = [], posts = [], events = [], frames = [], failures = [], statuses = [];
   let finished = 0, valid = true;
   class Socket {
-    constructor(url) { this.url = new URL(url); this.sent = []; sockets.push(this); }
+    static OPEN = 1;
+    constructor(url) { this.url = new URL(url); this.sent = []; this.readyState = 0; sockets.push(this); }
+    open() { this.readyState = Socket.OPEN; this.onopen?.(); }
     send(data) { this.sent.push(JSON.parse(data)); }
-    close() { if (this.closed) return; this.closed = true; this.onclose?.({ code: 1006, reason: '' }); }
+    close() { if (this.closed) return; this.closed = true; this.readyState = 3; this.onclose?.({ code: 1006, reason: '' }); }
   }
   class Events {
     constructor(url) { this.url = new URL(url); streams.push(this); }
@@ -21,17 +23,18 @@ function setup(t, history = { messages: [], active_kickoff_id: null }) {
   t.after(() => { for (const [key, value] of Object.entries(old)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } });
   const turn = { id: '11111111-2222-3333-4444-555555555555', message: 'Hello', previousUsers: 0, retries: 0, sent: false, lastId: '0-0', terminal: false };
   const callbacks = {
+    connection: {},
     api: async (path, method, payload) => { if (method === 'POST') { posts.push({ path, payload }); return { status: 'queued' }; } return history; },
     isCurrent: () => valid,
     status: value => statuses.push(value), log: (type, detail) => events.push({ type, detail }),
     onMessage: event => frames.push(JSON.parse(event.data)),
-    finish: () => { finished++; turn.terminal = true; turn.source?.close(); },
+    finish: () => { finished++; turn.terminal = true; if (turn.transport !== 'WebSocket') turn.source?.close(); },
     fail: value => failures.push(value),
   };
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  async function disconnect() {
-    const wait = 500 * (turn.retries + 1);
-    turn.source.close(); t.mock.timers.tick(wait); await flush();
+  async function disconnect(activeTurn = turn) {
+    const wait = 500 * (activeTurn.retries + 1);
+    activeTurn.source.close(); t.mock.timers.tick(wait); await flush();
   }
   return { turn, callbacks, sockets, streams, posts, events, frames, failures, statuses, disconnect, flush, finished: () => finished, cancel: () => { valid = false; } };
 }
@@ -63,7 +66,7 @@ test('initial WebSocket attempt plus three retries then SSE queues once, forward
 
 test('a delivered WebSocket message falls back to SSE attach at the same cursor without another send', async t => {
   const h = setup(t, { active_kickoff_id: 'running', messages: [] });
-  connectChatStream(h.turn, h.callbacks); h.sockets[0].onopen();
+  connectChatStream(h.turn, h.callbacks); h.sockets[0].open();
   assert.equal(h.sockets[0].sent.length, 1);
   h.turn.lastId = '123-4';
   for (let attempt = 0; attempt < 4; attempt++) await h.disconnect();
@@ -85,7 +88,7 @@ test('a delivered WebSocket message falls back to SSE attach at the same cursor 
 
 test('history completion ends recovery before retries or fallback', async t => {
   const h = setup(t, { active_kickoff_id: null, messages: [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' }] });
-  connectChatStream(h.turn, h.callbacks); h.sockets[0].onopen(); await h.disconnect();
+  connectChatStream(h.turn, h.callbacks); h.sockets[0].open(); await h.disconnect();
   assert.equal(h.finished(), 1);
   assert.equal(h.sockets.length, 1);
   assert.equal(h.streams.length, 0);
@@ -93,7 +96,7 @@ test('history completion ends recovery before retries or fallback', async t => {
 });
 
 test('uncertain WebSocket delivery is never resubmitted through SSE', async t => {
-  const h = setup(t); connectChatStream(h.turn, h.callbacks); h.sockets[0].onopen();
+  const h = setup(t); connectChatStream(h.turn, h.callbacks); h.sockets[0].open();
   await h.disconnect();
   assert.match(h.failures[0], /delivery could not be confirmed/);
   assert.equal(h.turn.terminal, true);
@@ -115,4 +118,57 @@ test('an uncertain HTTP send is reconciled and SSE attaches without sending agai
   assert.equal(h.streams.length, 1);
   assert.equal(h.posts.length, 1);
   assert.equal(h.failures.length, 0);
+});
+
+for (const terminal of ['turn_completed', 'turn_failed']) {
+  test(`one session reuses its open socket after ${terminal}, resetting the turn cursor`, t => {
+    const h = setup(t);
+    h.callbacks.onMessage = event => { h.frames.push(JSON.parse(event.data)); h.callbacks.finish(); };
+    connectChatStream(h.turn, h.callbacks); h.sockets[0].open();
+    h.turn.lastId = '123-9';
+    h.sockets[0].onmessage({ data: JSON.stringify({ type: terminal, kickoff_id: 'first' }) });
+    assert.equal(h.turn.terminal, true);
+    assert.equal(h.sockets[0].readyState, WebSocket.OPEN);
+    assert.ok(!h.sockets[0].closed);
+    const next = { ...h.turn, message: 'Next', terminal: false, sent: false, retries: 0, lastId: '0-0', previousUsers: 1 };
+    const nextFrames = [];
+    connectChatStream(next, { ...h.callbacks, onMessage: event => nextFrames.push(JSON.parse(event.data)) });
+    assert.equal(h.sockets.length, 1);
+    assert.equal(next.source, h.turn.source);
+    assert.deepEqual(h.sockets[0].sent.map(message => [message.message, message.lastEventId]), [['Hello', '0-0'], ['Next', '0-0']]);
+    assert.equal(h.events.filter(e => e.type === 'websocket_connected').length, 1);
+    assert.equal(h.events.filter(e => e.type === 'websocket_reused').length, 1);
+    h.sockets[0].onmessage({ data: JSON.stringify({ type: 'token', kickoff_id: 'second', data: { content: 'new reply' } }) });
+    assert.equal(nextFrames.length, 1);
+    assert.equal(h.frames.length, 1, 'Previous turn callback must not receive the new turn');
+  });
+}
+
+test('idle server closure clears the cached socket without retries; next turn opens a fresh socket', async t => {
+  const h = setup(t); connectChatStream(h.turn, h.callbacks); h.sockets[0].open(); h.callbacks.finish();
+  h.sockets[0].close(); t.mock.timers.tick(10000); await h.flush();
+  assert.equal(h.callbacks.connection.source, null);
+  assert.equal(h.sockets.length, 1);
+  assert.equal(h.events.filter(e => e.type === 'websocket_idle_closed').length, 1);
+  assert.equal(h.events.filter(e => e.type === 'transport_retry').length, 0);
+  assert.equal(h.failures.length, 0);
+  const next = { ...h.turn, message: 'Next', terminal: false, sent: false, retries: 0, lastId: '0-0' };
+  connectChatStream(next, h.callbacks); h.sockets[1].open();
+  assert.equal(h.sockets.length, 2);
+  assert.equal(h.sockets[1].sent[0].message, 'Next');
+  assert.equal(h.streams.length, 0);
+});
+
+test('a reused socket that disconnects still retries three times and falls back without resending', async t => {
+  const h = setup(t, { active_kickoff_id: 'running', messages: [] });
+  connectChatStream(h.turn, h.callbacks); h.sockets[0].open(); h.callbacks.finish();
+  const next = { ...h.turn, message: 'Next', terminal: false, sent: false, retries: 0, lastId: '0-0' };
+  connectChatStream(next, h.callbacks);
+  next.lastId = '456-7';
+  for (let attempt = 0; attempt < 4; attempt++) await h.disconnect(next);
+  assert.equal(h.sockets.length, 4); // First socket was reused, followed by three new attempts.
+  assert.equal(h.streams.length, 1);
+  assert.equal(h.streams[0].url.searchParams.get('last_event_id'), '456-7');
+  assert.equal(h.posts.length, 0);
+  assert.equal(h.sockets.reduce((count, socket) => count + socket.sent.filter(message => message.message === 'Next').length, 0), 1);
 });

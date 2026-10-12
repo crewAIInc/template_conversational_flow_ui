@@ -38,6 +38,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenu, setMobileMenu] = useState(false);
   const active = useRef(null);
+  const connection = useRef({});
   const generation = useRef(0);
   const onNew = useCallback(async message => {
     const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
@@ -55,7 +56,7 @@ export default function App() {
 
   useEffect(() => {
     checkDeployment();
-    return () => { generation.current++; if (active.current) { active.current.terminal = true; active.current.source?.close(); } };
+    return () => { generation.current++; releaseStream(); };
   }, []);
   useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(sessions)); } catch { /* Chat still works when storage is unavailable. */ } }, [sessions]);
   useEffect(() => {
@@ -74,18 +75,26 @@ export default function App() {
   function log(type, detail = '') {
     setActivity(previous => [...previous, { type, detail, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 }), key: crypto.randomUUID() }]);
   }
+  function releaseStream(nextId) {
+    if (active.current) {
+      active.current.terminal = true;
+      if (active.current.transport !== 'WebSocket' || active.current.id !== nextId) active.current.source?.close();
+    }
+    if (connection.current.id !== nextId) {
+      connection.current.source?.close(); connection.current = {};
+    }
+    active.current = null;
+  }
   function freshChat() {
     generation.current++;
-    if (active.current) { active.current.terminal = true; active.current.source?.close(); }
-    active.current = null;
+    releaseStream();
     setSession(null); setMessages([]); setActivity([]); setDraft(''); setMobileMenu(false);
     if (ready) { setError(''); setStatus('Ready'); }
     runtime.thread.composer.setText('');
   }
   async function openSession(item, preserveDraft = false) {
     const currentGeneration = ++generation.current;
-    if (active.current) { active.current.terminal = true; active.current.source?.close(); }
-    active.current = null;
+    releaseStream(item.id);
     if (!preserveDraft) runtime.thread.composer.setText('');
     setSession(item); setMessages([]); setActivity([]); setError(''); setBusy(true); setStatus('Loading history'); setMobileMenu(false);
     try {
@@ -101,7 +110,7 @@ export default function App() {
   }
   async function finish(turn, failure) {
     turn.terminal = true;
-    turn.source?.close();
+    if (turn.transport !== 'WebSocket') turn.source?.close();
     if (generation.current !== turn.generation) return;
     setStatus('Syncing history');
     try {
@@ -126,6 +135,7 @@ export default function App() {
     active.current = turn;
     setBusy(true);
     connectChatStream(turn, {
+      connection: connection.current,
       api, isCurrent: () => generation.current === turn.generation,
       status: setStatus, log, finish: () => finish(turn),
       fail: message => {
