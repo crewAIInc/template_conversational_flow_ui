@@ -16,6 +16,7 @@ test('chat renders safely with unavailable or malformed browser storage', async 
     const { default: App } = await import(file.href);
     let html = renderToStaticMarkup(React.createElement(App));
     assert.match(html, /How can I help you today\?/);
+    assert.ok(!html.includes('aria-label="Generated code"'), 'a new chat starts without a static artifact pane');
     assert.match(html, /role="log" aria-label="Messages"/);
     assert.match(html, /<label[^>]*for="message"/);
     assert.ok(html.match(/<button[^>]+aria-label="Send message"[^>]*>/)?.[0].includes('disabled=""'));
