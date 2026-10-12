@@ -252,7 +252,7 @@ function ChatMessage({ role }) {
   return <MessagePrimitive.Root className={`message ${role}`}>
     <div className="message-body">
       <MessagePrimitive.Parts>{({ part }) => part.type === 'text' ? <div className="markdown"><Markdown components={{ a: props => <a {...props} target="_blank" rel="noreferrer" /> }}>{part.text}</Markdown></div> : null}</MessagePrimitive.Parts>
-      {role === 'assistant' && <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="message-actions"><ActionBarPrimitive.Copy className="icon-button copy-button" aria-label="Copy response"><span className="copy-icon"><Icon name="copy" /></span><span className="copied-icon"><Icon name="check" /></span></ActionBarPrimitive.Copy></ActionBarPrimitive.Root>}
+      {role === 'assistant' && <div className="message-actions"><ActionBarPrimitive.Root hideWhenRunning autohide="not-last"><ActionBarPrimitive.Copy className="icon-button copy-button" aria-label="Copy response"><span className="copy-icon"><Icon name="copy" /></span><span className="copied-icon"><Icon name="check" /></span></ActionBarPrimitive.Copy></ActionBarPrimitive.Root></div>}
     </div>
   </MessagePrimitive.Root>;
 }

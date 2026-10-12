@@ -52,7 +52,9 @@ a { color: inherit; text-decoration: none; }
 .markdown code { font-size: .9em; background: #f1f1f3; border-radius: 4px; padding: 2px 4px; }
 .markdown pre code { padding: 0; background: transparent; }
 .markdown blockquote { margin-left: 0; border-left: 3px solid var(--border); padding-left: 16px; color: var(--muted); }
-.message-actions { margin-top: 10px; }
+.message-actions { display: flex; height: 32px; margin-top: 10px; }
+.copy-button { display: flex; flex: none; padding: 0; }
+.copy-icon, .copied-icon { display: inline-flex; width: 16px; height: 16px; }
 .copy-button svg { width: 16px; height: 16px; }
 .copied-icon, .copy-button[data-copied] .copy-icon { display: none; }
 .copy-button[data-copied] .copied-icon { display: inline-flex; }
