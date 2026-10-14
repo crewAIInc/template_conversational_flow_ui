@@ -82,6 +82,20 @@ Only one turn runs per session. After a disconnect during a turn, the UI checks 
 
 ## Reuse and customize
 
+### Runtime activity
+
+The assistant-ui Thinking Indicator follows the current chat state. MCP tool
+execution and CrewAI tool usage events render as native assistant-ui tool-call
+parts above the response, with running, completed, failed, or incomplete states.
+Expand a call to inspect its request, result, MCP server, and available duration.
+An expanded call stays open through final history sync and subsequent turns.
+
+Tool cards are reconstructed from live events in the current tab. The deployment's
+text-only history does not restore them after a reload. All raw frames remain in
+**Events**. Reasoning message parts are not wired yet; tool activity is displayed
+as tool calls rather than inferred reasoning.
+
+
 Copy the template source into your own project, install dependencies, and configure its `.env`. Each copy can connect to a different conversational Flow through the two environment variables above.
 
 | File | Customize |
@@ -91,6 +105,8 @@ Copy the template source into your own project, install dependencies, and config
 | `src/code-artifacts.mjs` | Extract top-level fenced code blocks, including code still streaming |
 | `src/assets/crewai-logo.png` | Top-left CrewAI logo |
 | `src/stream-text.mjs` | Text-frame handling |
+| `src/tool-events.mjs` | Correlate MCP/CrewAI tool events into tool-call message parts |
+| `src/components/assistant-ui/` | Thinking Indicator and expandable Tool Call views |
 | `src/chat-stream.mjs` | WebSocket retries, SSE fallback, and delivery recovery |
 | `server.mjs` | HTTP session/history routes, SSE relay, and server configuration |
 | `websocket-relay.mjs` | Authenticated WebSocket handshake, message validation, and frame forwarding |

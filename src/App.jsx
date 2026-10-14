@@ -4,6 +4,9 @@ import Markdown from 'react-markdown';
 import { textDelta } from './stream-text.mjs';
 import { connectChatStream, isCurrentTurnFrame } from './chat-stream.mjs';
 import { codeArtifacts, artifactFilename } from './code-artifacts.mjs';
+import { ThinkingIndicator } from './components/assistant-ui/ThinkingIndicator.jsx';
+import { ToolCall } from './components/assistant-ui/ToolCall.jsx';
+import { toolEvent, endToolCalls } from './tool-events.mjs';
 import crewaiLogo from './assets/crewai-logo.png';
 
 export function readSessions(storageKey) {
@@ -30,6 +33,8 @@ export default function App() {
   const [deployment, setDeployment] = useState(null);
   const [session, setSession] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [toolCalls, setToolCalls] = useState({});
+  const [openTools, setOpenTools] = useState({});
   const [draft, setDraft] = useState('');
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,9 +59,11 @@ export default function App() {
   const convertMessage = useCallback((message, index) => ({
     id: message.key || message.id || `${session?.id || 'new'}:${index}`,
     role: message.role,
-    content: [{ type: 'text', text: message.content || '' }],
-  }), [session?.id]);
+    content: [...(message.role === 'assistant' ? toolCalls[message.kickoff_id || message.key] || [] : []), { type: 'text', text: message.content || '' }],
+  }), [session?.id, toolCalls]);
   const chatMessages = useMemo(() => messages.filter(message => message.role === 'user' || message.role === 'assistant'), [messages]);
+  const latestMessage = chatMessages.at(-1);
+  const runningTool = latestMessage?.role === 'assistant' && toolCalls[latestMessage.kickoff_id || latestMessage.key]?.some(part => part.result === undefined);
   const artifacts = useMemo(() => chatMessages.flatMap((message, index) => message.role === 'assistant'
     ? codeArtifacts(message.content).map((artifact, artifactIndex) => ({ ...artifact, id: `${index}:${artifactIndex}`, messageIndex: index, messageId: convertMessage(message, index).id })) : []), [chatMessages, convertMessage]);
   const currentArtifact = artifacts.find(artifact => artifact.id === selectedArtifact);
@@ -118,7 +125,7 @@ export default function App() {
   function freshChat() {
     generation.current++;
     releaseStream();
-    setSession(null); setMessages([]); setActivity([]); setDraft(''); setMobileMenu(false);
+    setSession(null); setMessages([]); setToolCalls({}); setOpenTools({}); setActivity([]); setDraft(''); setMobileMenu(false);
     setSelectedArtifact(null); setMobilePane('intent'); setShowActivity(false); setOutputOpen(false); autoArtifactStart.current = null; autoArtifactSeen.current = null;
     if (ready) { setError(''); setStatus('Ready'); }
     runtime.thread.composer.setText('');
@@ -127,7 +134,7 @@ export default function App() {
     const currentGeneration = ++generation.current;
     releaseStream(item.id);
     if (!preserveDraft) runtime.thread.composer.setText('');
-    setSession(item); setMessages([]); setActivity([]); setError(''); setBusy(true); setStatus('Loading history'); setMobileMenu(false);
+    setSession(item); setMessages([]); setToolCalls({}); setOpenTools({}); setActivity([]); setError(''); setBusy(true); setStatus('Loading history'); setMobileMenu(false);
     setSelectedArtifact(null); setMobilePane('intent'); setShowActivity(false); setOutputOpen(false); autoArtifactStart.current = null; autoArtifactSeen.current = null;
     try {
       const history = await api(`/chat/${item.id}/history`);
@@ -144,6 +151,7 @@ export default function App() {
     turn.terminal = true;
     if (turn.transport !== 'WebSocket') turn.source?.close();
     if (generation.current !== turn.generation) return;
+    if (turn.tools?.length) setToolCalls(previous => ({ ...previous, [turn.kickoffId || turn.assistant]: endToolCalls(turn.tools) }));
     setStatus('Syncing history');
     try {
       let history;
@@ -187,6 +195,14 @@ export default function App() {
         log(frame.type || event.type || 'event', frame);
         // Ignore replayed frames and completion from earlier turns.
         if (!isCurrentTurnFrame(frame, turn)) return;
+        const tools = toolEvent(turn.tools || [], frame);
+        if (tools) {
+          turn.tools = tools;
+          setToolCalls(previous => ({ ...previous, [frame.kickoff_id || turn.kickoffId || turn.assistant]: tools }));
+          setMessages(previous => previous.some(item => item.key === turn.assistant) ? previous : [...previous, { role: 'assistant', content: '', key: turn.assistant, kickoff_id: frame.kickoff_id || turn.kickoffId }]);
+          const running = tools.find(part => part.result === undefined);
+          setStatus(running ? `Running ${running.toolName}` : turn.textSource ? `Streaming · ${turn.transport}` : 'Thinking');
+        }
         const delta = textDelta(frame, turn);
         if (delta) {
           const { content, replace } = delta;
@@ -266,9 +282,9 @@ export default function App() {
             {!messages.length && !busy && <div className="welcome"><h2>How can I help you today?</h2><p>Describe what you want to get done. Your flow will take it from there.</p></div>}
             <div className="message-list">
               <ThreadPrimitive.Messages>{({ message }) => {
-                return <ChatMessage role={message.role} artifacts={artifacts.filter(artifact => artifact.messageId === message.id)} onOpen={openArtifact} />;
+                return <ChatMessage role={message.role} artifacts={artifacts.filter(artifact => artifact.messageId === message.id)} onOpen={openArtifact} openTools={openTools} onToolOpen={(id, open) => setOpenTools(previous => previous[id] === open ? previous : { ...previous, [id]: open })} />;
               }}</ThreadPrimitive.Messages>
-              {busy && <div className="thinking"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status.startsWith('Streaming ·') ? 'Receiving response' : status}</span></div>}
+              {busy && !runningTool && <ThinkingIndicator label={status.startsWith('Streaming ·') ? 'Receiving response' : status} role="status" aria-live="polite" aria-atomic="true" />}
             </div>
           </ThreadPrimitive.Viewport>}
           <div className="composer-area">
@@ -293,7 +309,7 @@ export default function App() {
   </div></AssistantRuntimeProvider>;
 }
 
-function ChatMessage({ role, artifacts = [], onOpen }) {
+function ChatMessage({ role, artifacts = [], onOpen, openTools, onToolOpen }) {
   return <MessagePrimitive.Root className={`message ${role}`}>
     <div className="message-body">
       <MessagePrimitive.Parts>{({ part }) => part.type === 'text' ? <div className="markdown"><Markdown components={{
@@ -302,7 +318,7 @@ function ChatMessage({ role, artifacts = [], onOpen }) {
           const artifact = artifacts.find(item => item.line === node.position?.start.line);
           return artifact ? <button className="artifact-card" onClick={() => onOpen(artifact.id)} aria-label={`Open ${artifactFilename(artifact)}`}><span className="artifact-glyph" aria-hidden="true">{'</>'}</span><span className="artifact-card-info"><strong>{artifactFilename(artifact)}</strong><span>{artifact.complete ? `${artifact.code.split('\n').length} lines of code` : 'Streaming code…'}</span></span><span className="artifact-card-open" aria-hidden="true">Open ↗</span></button> : <pre>{children}</pre>;
         },
-      }}>{part.text}</Markdown></div> : null}</MessagePrimitive.Parts>
+      }}>{part.text}</Markdown></div> : part.type === 'tool-call' ? <ToolCall part={part} open={Boolean(openTools[part.toolCallId])} onOpenChange={open => onToolOpen(part.toolCallId, open)} /> : null}</MessagePrimitive.Parts>
       {role === 'assistant' && <div className="message-actions"><ActionBarPrimitive.Root hideWhenRunning autohide="not-last"><ActionBarPrimitive.Copy className="icon-button copy-button" aria-label="Copy response"><span className="copy-icon"><Icon name="copy" /></span><span className="copied-icon"><Icon name="check" /></span></ActionBarPrimitive.Copy></ActionBarPrimitive.Root></div>}
     </div>
   </MessagePrimitive.Root>;
