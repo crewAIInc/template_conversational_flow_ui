@@ -1,0 +1,46 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+@import "tw-shimmer";
+
+@theme inline {
+  --color-background: #fff;
+  --color-foreground: #242528;
+  --color-muted-foreground: #6a6d72;
+  --color-border: #e5e6e8;
+  --color-ring: #b9443d;
+  --color-muted: #f4f4f6;
+  --color-primary: #242528;
+  --color-accent: #ededf0;
+  --color-accent-foreground: #242528;
+  @keyframes collapsible-down {
+    from { height: 0; }
+    to { height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto)); }
+  }
+  @keyframes collapsible-up {
+    from { height: var(--radix-collapsible-content-height, var(--collapsible-panel-height, auto)); }
+    to { height: 0; }
+  }
+}
+
+/* Elements expect Tailwind's base resets. Scope them to preserve chat Markdown. */
+@layer base {
+  .aui-elements :where(*, ::before, ::after) { border: 0 solid var(--border); }
+  .aui-elements :where(button) { appearance: button; background: transparent; border: 0 solid; padding: 0; font: inherit; }
+  .aui-elements :where(p) { margin: 0; }
+  .aui-elements :where(ul, ol) { padding: 0; }
+  .aui-elements :where(svg) { display: block; vertical-align: middle; }
+}
+
+/* Radix measures height on open, so a live result must size itself as it changes. */
+.tool-activity [data-slot="collapsible-content"][data-state="open"] { height: auto; }
+.tool-activity [data-slot="collapsible-content"] p:nth-child(2) { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-activity [data-slot="collapsible-trigger"][data-state="open"] > svg:first-child { transform: rotate(90deg); }
+.aui-elements [data-slot="sources"] [data-slot="collapsible-content"][data-state="open"] { height: auto; }
+.aui-elements [data-state="open"] > [data-slot$="trigger-chevron"] { transform: rotate(0); }
+.aui-elements [data-slot="sources"] [data-state="open"] > svg:last-child { transform: rotate(180deg); }
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 import { attachWebSocketRelay } from './websocket-relay.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +18,7 @@ try {
   if (!['https:', 'http:'].includes(base.protocol) || base.username || base.password) base = undefined;
 } catch { /* A missing configuration is reported through /api/inspect. */ }
 const configured = Boolean(base && token);
+const deployment = base ? { id: createHash('sha256').update(base.origin + base.pathname.replace(/\/$/, '')).digest('hex').slice(0, 16), hostname: base.hostname } : null;
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 const chatPath = new RegExp(`^/api/chat/(${uuid})/(history|message|stream/events)$`);
 const json = (res, status, body) => {
@@ -113,8 +115,8 @@ const server = createServer(async (req, res) => {
         signal: AbortSignal.timeout(20000), redirect: 'error',
       });
       const body = await response.json().catch(() => ({ error: `CrewAI returned HTTP ${response.status}.` }));
-      // The browser only receives chat capability, never the full deployment configuration.
-      if (path === '/inspect' && response.ok) return json(res, 200, { chat: body.flow?.chat ?? null });
+      // Expose only chat capability and public deployment identity, never credentials.
+      if (path === '/inspect' && response.ok) return json(res, 200, { chat: body.flow?.chat ?? null, deployment });
       return json(res, response.status, body);
     } catch (error) { return json(res, 502, { error: connectionError(error) }); }
   }

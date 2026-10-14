@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connectChatStream } from '../src/chat-stream.mjs';
+import { connectChatStream, isCurrentTurnFrame } from '../src/chat-stream.mjs';
 
 function setup(t, history = { messages: [], active_kickoff_id: null }) {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -171,4 +171,16 @@ test('a reused socket that disconnects still retries three times and falls back 
   assert.equal(h.streams[0].url.searchParams.get('last_event_id'), '456-7');
   assert.equal(h.posts.length, 0);
   assert.equal(h.sockets.reduce((count, socket) => count + socket.sent.filter(message => message.message === 'Next').length, 0), 1);
+});
+
+test('replayed events and completion from older turns cannot affect a new or resumed turn', () => {
+  const turn = {};
+  assert.equal(isCurrentTurnFrame({ type: 'mcp_tool_execution_started', kickoff_id: 'old' }, turn), false);
+  assert.equal(isCurrentTurnFrame({ type: 'turn_completed', kickoff_id: 'old' }, turn), false);
+  assert.equal(isCurrentTurnFrame({ type: 'turn_started', kickoff_id: 'new', data: { status: 'queued' } }, turn), true);
+  assert.equal(turn.kickoffId, 'new');
+  assert.equal(isCurrentTurnFrame({ type: 'mcp_tool_execution_started', kickoff_id: 'new' }, turn), true);
+  assert.equal(isCurrentTurnFrame({ type: 'turn_completed', kickoff_id: 'old' }, turn), false);
+  assert.equal(isCurrentTurnFrame({ type: 'mcp_tool_execution_started', kickoff_id: 'new' }, { kickoffId: 'new' }), true);
+  assert.equal(isCurrentTurnFrame({ type: 'error', data: { message: 'Request rejected' } }, turn), true);
 });

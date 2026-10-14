@@ -82,6 +82,54 @@ Only one turn runs per session. After a disconnect during a turn, the UI checks 
 
 ## Reuse and customize
 
+### Runtime activity
+
+The UI uses official assistant-ui Elements on top of `useExternalStoreRuntime`:
+
+| Element | CrewAI integration |
+| --- | --- |
+| Thinking Indicator | Current connection/response state |
+| Tool Call and Tool Group | MCP/CrewAI tool events become native tool-call parts, grouped behind one disclosure |
+| Markdown Text | Streaming replies, tables, lists, and links |
+| Syntax Highlighter | Lazy-loaded highlighting in the code pane and non-artifact code fences |
+| Thread List | This deployment's browser-saved session IDs, titles, and dates; selection loads CrewAI history |
+| Reasoning | Explicit `llm_thinking_chunk` text and `agent_reasoning_completed` plans become separate reasoning parts |
+| Sources | HTTP(S) references from `source`/`sources` frames, structured tool results (`sources`/`results`), or Exa's explicit Title/URL metadata rows |
+| Message Timing | Browser-measured first event, worker turn-start event, first text, and total stream time |
+
+Expand the tool group, then a call to inspect its request, result, MCP server,
+and available duration. Tool result panels resize when a result arrives while
+open. Long payloads scroll within the card. Reasoning uses its own disclosure;
+tool calls and ordinary logs do not become reasoning text.
+
+Timings start when the UI accepts Send and include session creation, any history
+check, connection setup, and transport/worker latency. **Turn started** excludes
+the initial queued acknowledgement. **First text** is the first accepted answer
+text frame, which may precede the final public reply. **Total** ends at the
+terminal frame, or at history recovery when the terminal frame was missed.
+These are browser observations, not server-only execution durations. Resumed
+turns without a known Send time omit timings.
+
+Tool cards, reasoning, sources, and timings are reconstructed from live events
+in the current tab. The deployment's text-only history does not restore these
+extras after reloading or switching conversations. All raw frames remain in
+**Events** for the current conversation. The history transcript stays authoritative.
+
+The Elements are installed as source from the official registry:
+
+```sh
+npx shadcn@latest add @assistant-ui/elements-thinking-indicator @assistant-ui/elements-tool-call @assistant-ui/tool-group @assistant-ui/markdown-text @assistant-ui/syntax-highlighter @assistant-ui/elements-thread-list @assistant-ui/reasoning @assistant-ui/elements-sources @assistant-ui/elements-message-timing
+```
+
+Registry source lives in `src/components/assistant-ui/`, with shared shadcn
+button/tooltip components in `src/components/ui/`. `src/ToolActivity.jsx` maps
+CrewAI tool-call fields into the Tool Call Element's props. Tailwind compiles
+the supplied utilities; its base reset is scoped to the assistant-ui views.
+`components.json` records the registry and `src/assistant-ui.css` supplies the
+template's theme and Radix compatibility rules. The workspace panels and code
+artifact opening/downloading behavior remain template-specific.
+
+
 Copy the template source into your own project, install dependencies, and configure its `.env`. Each copy can connect to a different conversational Flow through the two environment variables above.
 
 | File | Customize |
@@ -91,12 +139,16 @@ Copy the template source into your own project, install dependencies, and config
 | `src/code-artifacts.mjs` | Extract top-level fenced code blocks, including code still streaming |
 | `src/assets/crewai-logo.png` | Top-left CrewAI logo |
 | `src/stream-text.mjs` | Text-frame handling |
+| `src/message-details.mjs` | Explicit reasoning/source fields and browser response timing |
+| `src/tool-events.mjs` | Correlate MCP/CrewAI tool events into tool-call message parts |
+| `src/components/assistant-ui/` | Official registry Elements and shared dependencies |
+| `src/ToolActivity.jsx` | Map CrewAI tool-call parts into the official Tool Call Element |
 | `src/chat-stream.mjs` | WebSocket retries, SSE fallback, and delivery recovery |
 | `server.mjs` | HTTP session/history routes, SSE relay, and server configuration |
 | `websocket-relay.mjs` | Authenticated WebSocket handshake, message validation, and frame forwarding |
 | `index.html` | Page title and favicon |
 
-When switching deployments in the same browser, start a **New thread**. Existing sidebar sessions belong to their original deployment; use a separate browser profile or clear this site's storage if you want a clean conversation list.
+The connected deployment hostname appears below **Flow connected**. Sidebar sessions are saved separately for each deployment URL, so switching `.env` and restarting the server loads that deployment's own list and starts a fresh thread. The old shared session-storage entry is preserved but is not mixed into a deployment-specific list. Credentials stay server-side; the browser receives only a public hostname and a stable URL-derived identifier.
 
 ## Build and verify
 

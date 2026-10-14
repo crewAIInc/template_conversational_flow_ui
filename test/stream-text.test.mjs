@@ -21,3 +21,11 @@ test('actual deployment LLM chunks build text; normalized tokens take precedence
   receive({ type: 'token', data: { content: 'TEXT_OK' } });
   assert.equal(text, 'SSE_TEXT_OK');
 });
+
+test('a public assistant message replaces intermediate model text and excludes later raw chunks', () => {
+  const turn = {};
+  textDelta({ type: 'llm_stream_chunk', data: { chunk: 'Intermediate' } }, turn);
+  assert.deepEqual(textDelta({ type: 'conversation_message_added', data: { role: 'assistant', content: 'Public answer' } }, turn), { content: 'Public answer', replace: true });
+  assert.equal(textDelta({ type: 'llm_stream_chunk', data: { chunk: 'Duplicate' } }, turn), null);
+  assert.equal(textDelta({ type: 'conversation_message_added', data: { role: 'user', content: 'User text' } }, turn), null);
+});
