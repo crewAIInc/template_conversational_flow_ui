@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useExternalStoreRuntime } from '@assistant-ui/react';
 import Markdown from 'react-markdown';
 import { textDelta } from './stream-text.mjs';
-import { connectChatStream } from './chat-stream.mjs';
+import { connectChatStream, isCurrentTurnFrame } from './chat-stream.mjs';
 import { codeArtifacts, artifactFilename } from './code-artifacts.mjs';
 import crewaiLogo from './assets/crewai-logo.png';
 
-const storageKey = 'crewai-flow-sessions';
-function readSessions() {
+export function readSessions(storageKey) {
+  if (!storageKey) return [];
   try {
     const sessions = JSON.parse(localStorage.getItem(storageKey) || '[]');
     return Array.isArray(sessions) ? sessions.filter(s => s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s.id) && typeof s.title === 'string').slice(0, 20) : [];
@@ -26,7 +26,8 @@ async function api(path, method = 'GET', payload) {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export default function App() {
-  const [sessions, setSessions] = useState(readSessions);
+  const [sessions, setSessions] = useState([]);
+  const [deployment, setDeployment] = useState(null);
   const [session, setSession] = useState(null);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
@@ -69,7 +70,10 @@ export default function App() {
     checkDeployment();
     return () => { generation.current++; releaseStream(); };
   }, []);
-  useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(sessions)); } catch { /* Chat still works when storage is unavailable. */ } }, [sessions]);
+  useEffect(() => {
+    if (!deployment) return;
+    try { localStorage.setItem(`crewai-flow-sessions:${deployment.id}`, JSON.stringify(sessions)); } catch { /* Chat still works when storage is unavailable. */ }
+  }, [sessions, deployment]);
   useEffect(() => {
     if (draft) { runtime.thread.composer.setText(draft); setDraft(''); }
   }, [draft, runtime]);
@@ -87,8 +91,15 @@ export default function App() {
     try {
       const result = await api('/inspect');
       if (!result.chat?.conversational || !result.chat?.handle_turn) throw new Error('This deployment does not support conversational chat. Enable conversational and handle_turn on the Flow.');
+      if (!result.deployment?.id || !result.deployment?.hostname) throw new Error('Restart the Node server to load the current deployment identity.');
+      if (deployment?.id !== result.deployment.id) {
+        freshChat();
+        setSessions(readSessions(`crewai-flow-sessions:${result.deployment.id}`));
+        setDeployment(result.deployment);
+        log('deployment_connected', { hostname: result.deployment.hostname });
+      }
       setReady(true); setStatus('Ready');
-      return true;
+      return result.deployment.id;
     } catch (error) { setReady(false); setStatus('Unavailable'); setError(error.message); return false; }
   }
   function log(type, detail = '') {
@@ -122,7 +133,7 @@ export default function App() {
       const history = await api(`/chat/${item.id}/history`);
       if (generation.current !== currentGeneration) return;
       setMessages(history.messages || []); setReady(true);
-      if (history.active_kickoff_id) startStream(item.id, null, currentGeneration);
+      if (history.active_kickoff_id) startStream(item.id, null, currentGeneration, history.active_kickoff_id);
       else { setBusy(false); setStatus('Ready'); }
     } catch (error) {
       if (generation.current !== currentGeneration) return;
@@ -151,8 +162,8 @@ export default function App() {
       if (failure) { setError(failure); setReady(false); setStatus('Disconnected'); if (turn.message) setDraft(turn.message); }
     }
   }
-  function startStream(id, message, currentGeneration) {
-    const turn = { id, message, generation: currentGeneration, previousUsers: messages.filter(m => m.role === 'user').length, terminal: false, retries: 0, sent: false, lastId: '0-0', seen: new Set(), assistant: crypto.randomUUID() };
+  function startStream(id, message, currentGeneration, kickoffId) {
+    const turn = { id, message, generation: currentGeneration, kickoffId, previousUsers: messages.filter(m => m.role === 'user').length, terminal: false, retries: 0, sent: false, lastId: '0-0', seen: new Set(), assistant: crypto.randomUUID() };
     active.current = turn;
     setBusy(true);
     connectChatStream(turn, {
@@ -174,14 +185,16 @@ export default function App() {
         }
         // Keep the complete payload of every frame, including individual tokens.
         log(frame.type || event.type || 'event', frame);
+        // Ignore replayed frames and completion from earlier turns.
+        if (!isCurrentTurnFrame(frame, turn)) return;
         const delta = textDelta(frame, turn);
         if (delta) {
           const { content, replace } = delta;
           setStatus(`Streaming · ${turn.transport}`);
           setMessages(previous => {
             const index = previous.findIndex(m => m.key === turn.assistant);
-            if (index < 0) return [...previous, { role: 'assistant', content, key: turn.assistant }];
-            return previous.map((m, i) => i === index ? { ...m, content: replace ? content : m.content + content } : m);
+            if (index < 0) return [...previous, { role: 'assistant', content, key: turn.assistant, kickoff_id: frame.kickoff_id }];
+            return previous.map((m, i) => i === index ? { ...m, content: replace ? content : m.content + content, kickoff_id: frame.kickoff_id || m.kickoff_id } : m);
           });
         }
         if (frame.type === 'turn_started') { setStatus('Thinking'); setError(''); }
@@ -208,7 +221,7 @@ export default function App() {
         const history = await api(`/chat/${current.id}/history`);
         setMessages(history.messages || []);
         if (history.active_kickoff_id) {
-          startStream(current.id, null, currentGeneration);
+          startStream(current.id, null, currentGeneration, history.active_kickoff_id);
           return;
         }
       }
@@ -217,9 +230,8 @@ export default function App() {
     } catch (error) { setDraft(message); setError(error.message); setBusy(false); setReady(false); setStatus('Disconnected'); }
   }
   async function reconnect() {
-    if (await checkDeployment()) {
-      if (session) await openSession(session, true);
-    }
+    const connectedId = await checkDeployment();
+    if (connectedId && session && deployment?.id === connectedId) await openSession(session, true);
   }
 
   function openArtifact(id) { setSelectedArtifact(id); setOutputOpen(true); setMobilePane('output'); }
@@ -237,7 +249,7 @@ export default function App() {
           {!sessions.length && <p className="history-empty">Your conversations will appear here after your first request.</p>}
         </nav>
       </div>
-      <div className="sidebar-bottom"><div className="connection-state"><span className={`status-dot ${ready && !error ? 'green' : ''}`} /><span>{ready && !error ? 'Flow connected' : 'Deployment unavailable'}</span></div><span className="connection-caption">CrewAI conversational flow</span>{session && <details className="session-info"><summary>Session details</summary><code>{session.id}</code></details>}</div>
+      <div className="sidebar-bottom"><div className="connection-state"><span className={`status-dot ${ready && !error ? 'green' : ''}`} /><span>{ready && !error ? 'Flow connected' : 'Deployment unavailable'}</span></div><span className="connection-caption" title={deployment?.hostname}>{deployment?.hostname || 'CrewAI conversational flow'}</span>{session && <details className="session-info"><summary>Session details</summary><code>{session.id}</code></details>}</div>
     </aside>
     <main className="workspace">
       <header className="topbar">
@@ -253,7 +265,9 @@ export default function App() {
           {showActivity ? <section className="activity-panel" aria-label="Runtime activity"><div className="activity-header"><h2>Runtime activity</h2><button className="icon-button" aria-label="Close activity" onClick={() => setShowActivity(false)}><Icon name="close" /></button></div><p className="activity-description">Every received frame, including response tokens. Times show when this browser received each event.</p><div className="event-list">{!activity.length && <div className="activity-empty"><h3>No events yet</h3><p>Send a request to see your flow’s live activity.</p></div>}{activity.map(item => <div className="event" key={item.key}><div><strong>{item.type.replaceAll('_', ' ')}</strong><time>{item.time}</time></div>{item.detail && <details><summary>View payload</summary><pre>{typeof item.detail === 'string' ? item.detail : JSON.stringify(item.detail, null, 2)}</pre></details>}</div>)}</div></section> : <ThreadPrimitive.Viewport className="transcript" role="log" aria-label="Messages" aria-live="polite" aria-relevant="additions text">
             {!messages.length && !busy && <div className="welcome"><h2>How can I help you today?</h2><p>Describe what you want to get done. Your flow will take it from there.</p></div>}
             <div className="message-list">
-              <ThreadPrimitive.Messages>{({ message }) => <ChatMessage role={message.role} artifacts={artifacts.filter(artifact => artifact.messageId === message.id)} onOpen={openArtifact} />}</ThreadPrimitive.Messages>
+              <ThreadPrimitive.Messages>{({ message }) => {
+                return <ChatMessage role={message.role} artifacts={artifacts.filter(artifact => artifact.messageId === message.id)} onOpen={openArtifact} />;
+              }}</ThreadPrimitive.Messages>
               {busy && <div className="thinking"><span className="thinking-dots" aria-hidden="true"><i /><i /><i /></span><span>{status.startsWith('Streaming ·') ? 'Receiving response' : status}</span></div>}
             </div>
           </ThreadPrimitive.Viewport>}

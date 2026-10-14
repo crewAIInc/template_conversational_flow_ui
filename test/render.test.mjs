@@ -13,7 +13,8 @@ test('chat renders safely with unavailable or malformed browser storage', async 
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => stored } });
   try {
     await writeFile(file, result.outputFiles[0].text);
-    const { default: App } = await import(file.href);
+    const { default: App, readSessions } = await import(file.href);
+    assert.deepEqual(readSessions('deployment-a'), []);
     let html = renderToStaticMarkup(React.createElement(App));
     assert.match(html, /How can I help you today\?/);
     assert.ok(!html.includes('aria-label="Generated code"'), 'a new chat starts without a static artifact pane');
@@ -28,8 +29,15 @@ test('chat renders safely with unavailable or malformed browser storage', async 
     html = renderToStaticMarkup(React.createElement(App));
     assert.ok(!html.includes('Invalid session'));
     assert.ok(!html.includes('<script>alert(1)</script>'));
-    assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+    assert.ok(!html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'history is not shown before the connected deployment is known');
+    assert.equal(readSessions('deployment-a').length, 1);
+    const histories = { 'deployment-a': stored, 'deployment-b': '[]' };
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: key => histories[key] } });
+    assert.equal(readSessions('deployment-a').length, 1);
+    assert.deepEqual(readSessions('deployment-b'), []);
+    assert.deepEqual(readSessions(), []);
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('Storage access denied'); } });
+    assert.deepEqual(readSessions('deployment-a'), []);
     html = renderToStaticMarkup(React.createElement(App));
     assert.match(html, /How can I help you today\?/);
   } finally {

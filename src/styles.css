@@ -24,7 +24,7 @@ a { color: inherit; text-decoration: none; }
 .history-empty { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 8px; }
 .sidebar-bottom { padding: 18px 22px; border-top: 1px solid var(--border); font-size: 11px; }
 .connection-state { display: flex; gap: 8px; align-items: center; }
-.connection-caption { display: block; margin: 7px 0 0 14px; color: var(--muted); font-size: 10px; }
+.connection-caption { display: block; margin: 7px 0 0 14px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; line-height: 1.6; }
 .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #959ba0; flex-shrink: 0; }
 .status-dot.green { background: #47835d; }
 .session-info { margin-top: 16px; color: var(--muted); font-size: 10px; }

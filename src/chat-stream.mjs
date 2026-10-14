@@ -1,5 +1,10 @@
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+export function isCurrentTurnFrame(frame, turn) {
+  if (!turn.kickoffId && frame.type === 'turn_started' && frame.data?.status === 'queued') turn.kickoffId = frame.kickoff_id;
+  return !frame.kickoff_id || frame.kickoff_id === turn.kickoffId;
+}
+
 // One initial WebSocket attempt plus three retries, then HTTP send + SSE attach.
 export function connectChatStream(turn, { api, isCurrent, status, log, onMessage, finish, fail, connection }) {
   turn.transport = 'WebSocket';
@@ -17,6 +22,7 @@ export function connectChatStream(turn, { api, isCurrent, status, log, onMessage
         turn.sent = true;
         const queued = await api(`/chat/${turn.id}/message`, 'POST', { message: turn.message, stream: true });
         if (!current()) return;
+        turn.kickoffId = queued.kickoff_id;
         log('turn_queued', queued);
       }
       status(turn.retries ? `Reconnecting ${turn.transport}` : `Connecting ${turn.transport}`);
@@ -67,6 +73,7 @@ export function connectChatStream(turn, { api, isCurrent, status, log, onMessage
       const history = await api(`/chat/${turn.id}/history`);
       if (!current()) return;
       turn.attachOnly = Boolean(history.active_kickoff_id);
+      if (turn.attachOnly) turn.kickoffId = history.active_kickoff_id;
       if (!turn.attachOnly) {
         const users = (history.messages || []).filter(m => m.role === 'user');
         if (!turn.message || (users.length > turn.previousUsers && users.at(-1)?.content === turn.message)) {

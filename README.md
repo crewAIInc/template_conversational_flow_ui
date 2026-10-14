@@ -96,7 +96,7 @@ Copy the template source into your own project, install dependencies, and config
 | `websocket-relay.mjs` | Authenticated WebSocket handshake, message validation, and frame forwarding |
 | `index.html` | Page title and favicon |
 
-When switching deployments in the same browser, start a **New thread**. Existing sidebar sessions belong to their original deployment; use a separate browser profile or clear this site's storage if you want a clean conversation list.
+The connected deployment hostname appears below **Flow connected**. Sidebar sessions are saved separately for each deployment URL, so switching `.env` and restarting the server loads that deployment's own list and starts a fresh thread. The old shared session-storage entry is preserved but is not mixed into a deployment-specific list. Credentials stay server-side; the browser receives only a public hostname and a stable URL-derived identifier.
 
 ## Build and verify
 

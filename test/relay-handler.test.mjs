@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Server } from 'node:http';
 import { Readable, Writable } from 'node:stream';
 import { once } from 'node:events';
+import { createHash } from 'node:crypto';
 
 // Exercise the actual HTTP handler without opening TCP ports in restricted sessions.
 test('HTTP handler validates message/auth boundaries and keeps deployment configuration server-side', async t => {
@@ -48,7 +49,8 @@ test('HTTP handler validates message/auth boundaries and keeps deployment config
   assert.equal(denied.statusCode, 403);
   assert.equal(calls.length, 1);
   const inspected = request('/api/inspect'); await once(inspected, 'finish');
-  assert.deepEqual(JSON.parse(Buffer.concat(inspected.parts).toString()), { chat: { conversational: true, handle_turn: true } });
+  assert.deepEqual(JSON.parse(Buffer.concat(inspected.parts).toString()), { chat: { conversational: true, handle_turn: true }, deployment: { id: createHash('sha256').update('https://test.example').digest('hex').slice(0, 16), hostname: 'test.example' } });
+  assert.ok(!Buffer.concat(inspected.parts).toString().includes('test-only-secret'));
   const streamed = request(`/api/chat/${id}/stream/events?events=token&last_event_id=123-4`);
   await once(streamed, 'headers');
   assert.equal(streamed.headers['Content-Type'], 'text/event-stream');
