@@ -1,8 +1,10 @@
 :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #242528; background: #fff; font-synthesis: none; --muted: #6a6d72; --border: #e5e6e8; --accent: #b9443d; }
 * { box-sizing: border-box; }
 body { margin: 0; }
-button, textarea { font: inherit; }
-button { cursor: pointer; color: inherit; }
+@layer base {
+  button, textarea { font: inherit; }
+  button { cursor: pointer; color: inherit; }
+}
 button:disabled { opacity: .45; cursor: not-allowed; }
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 a { color: inherit; text-decoration: none; }
@@ -16,11 +18,7 @@ a { color: inherit; text-decoration: none; }
 .sidebar-heading { display: flex; justify-content: space-between; margin: 27px 8px 12px; color: var(--muted); font-size: 11px; font-weight: 500; }
 .sidebar-heading span { font-variant-numeric: tabular-nums; }
 .conversation-list { overflow-y: auto; scrollbar-width: thin; }
-.conversation { display: flex; align-items: center; gap: 9px; width: 100%; padding: 11px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; text-align: left; font-size: 12px; margin-bottom: 3px; }
-.conversation svg { width: 14px; height: 14px; flex-shrink: 0; color: #80838a; }
-.conversation span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.conversation:hover { background: #ededf0; }
-.conversation.selected { background: #e9e9ec; }
+.thread-list-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .history-empty { font-size: 12px; line-height: 1.7; color: var(--muted); margin: 8px; }
 .sidebar-bottom { padding: 18px 22px; border-top: 1px solid var(--border); font-size: 11px; }
 .connection-state { display: flex; gap: 8px; align-items: center; }
@@ -53,6 +51,7 @@ a { color: inherit; text-decoration: none; }
 .welcome h2 { font-size: clamp(25px, 2.6vw, 32px); font-weight: 550; letter-spacing: -.9px; margin: 0; }
 .welcome p { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 15px auto 0; max-width: 360px; }
 .message { display: flex; padding: 16px 0; }
+.message-body { min-width: 0; }
 .message.user { justify-content: flex-end; }
 .message.user .message-body { background: #f1f1f3; border-radius: 16px; padding: 11px 16px; max-width: 90%; }
 .message.assistant .message-body { width: 100%; padding: 8px 0; }
@@ -109,42 +108,10 @@ a { color: inherit; text-decoration: none; }
 .artifact-code pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .artifact-code code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; line-height: 1.9; }
 .artifact-copy-error { color: #913c36; font-size: 11px; margin: 12px 24px 0; }
-.thinking-indicator { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; padding: 12px 0 24px; }
-.thinking-indicator-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: #3b82f6; animation: thinking-pulse 2s ease-in-out infinite; }
-.thinking-indicator-label { display: inline-block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; animation: thinking-enter .3s ease-out both; }
-.thinking-indicator-elapsed { flex-shrink: 0; font-family: ui-monospace, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
-.tool-call { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
-.tool-call > summary { display: flex; align-items: center; gap: 8px; padding: 8px 0; cursor: pointer; list-style: none; border-radius: 6px; }
-.tool-call > summary::-webkit-details-marker { display: none; }
-.tool-call > summary:hover { color: #242528; }
-.tool-call-chevron { flex-shrink: 0; font-size: 18px; transition: transform .2s; }
-.tool-call[open] .tool-call-chevron { transform: rotate(90deg); }
-.tool-call-query { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 6px; background: #f1f1f3; border-radius: 5px; font-family: ui-monospace, monospace; font-size: 11px; }
-.tool-call-state { margin-left: auto; flex-shrink: 0; font-size: 10px; color: #488564; }
-.tool-call[data-status="running"] .tool-call-state { color: var(--muted); }
-.tool-call[data-status="failed"] .tool-call-state, .tool-call[data-status="incomplete"] .tool-call-state { color: #913c36; }
-.tool-call-content { padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: #fafafa; }
-.tool-call-content h3 { font-size: 11px; font-weight: 500; margin: 12px 0 6px; }
-.tool-call-content pre { margin: 0; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #242528; font-size: 11px; line-height: 1.7; }
-.tool-call-server, .tool-call-duration { margin: 0; font-size: 10px; }
-.tool-call-duration { margin-top: 12px; }
-@supports ((background-clip: text) or (-webkit-background-clip: text)) {
-  .thinking-indicator-label {
-    background-image: linear-gradient(110deg, var(--muted) 35%, #b2b4ba 50%, var(--muted) 65%);
-    background-size: 200% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    animation: thinking-shimmer 2s linear infinite, thinking-enter .3s ease-out both;
-  }
-}
-@keyframes thinking-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@keyframes thinking-pulse { 50% { opacity: .5; } }
-@keyframes thinking-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@media (prefers-reduced-motion: reduce) {
-  .thinking-indicator-label { background-image: none; color: var(--muted); animation: none; }
-  .thinking-indicator-dot { animation: none; }
-}
+.tool-activity { margin-bottom: 14px; }
+.tool-group { margin-bottom: 16px; }
+.message-extras { display: grid; gap: 12px; margin-top: 14px; }
+.tool-activity-meta { margin: 4px 0 0; font-size: 10px; color: var(--muted); }
 .error-banner { display: flex; align-items: center; gap: 16px; padding: 12px 24px; flex-shrink: 0; border-bottom: 1px solid #e9c5c2; background: #fff4f3; color: #913c36; font-size: 12px; }
 .error-banner > div { flex: 1; min-width: 0; }
 .error-banner p { margin: 4px 0 0; line-height: 1.5; overflow-wrap: anywhere; }

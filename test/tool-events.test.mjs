@@ -40,5 +40,8 @@ test('MCP failures and CrewAI tools settle without pretending to have successful
   assert.equal(completed.length, 1);
   assert.equal(completed[0].result, 4);
   assert.deepEqual(completed[0].args, { input: '2 + 2' });
+  const structured = toolEvent([], { id: 'exa', type: 'tool_usage_started', data: { tool_name: 'exa_search_tool', tool_args: '{"search_query":"CrewAI GitHub repository"}' } });
+  assert.equal(structured[0].args.search_query, 'CrewAI GitHub repository');
+  assert.equal(structured[0].argsText, '{"search_query":"CrewAI GitHub repository"}');
   assert.equal(toolEvent([], { type: 'llm_stream_chunk', data: { chunk: 'text' } }), null);
 });

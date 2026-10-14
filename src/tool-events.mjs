@@ -16,12 +16,14 @@ export function toolEvent(parts, frame) {
   const old = parts.find(part => part.toolCallId === id);
   // A replayed start must not turn a completed call back into a running call.
   if (starts.has(frame.type) && old) return parts;
-  const args = data.tool_args ?? old?.args ?? {};
+  const rawArgs = data.tool_args ?? old?.args ?? {};
+  let args = rawArgs;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { /* Unstructured tool input. */ } }
   const failed = failures.has(frame.type) || Boolean(data.failure);
   const part = {
     type: 'tool-call', toolCallId: id, toolName: data.tool_name,
     args: typeof args === 'object' && args !== null && !Array.isArray(args) ? args : { input: args },
-    argsText: typeof args === 'string' ? args : JSON.stringify(args, null, 2),
+    argsText: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2),
     artifact: { server: data.server_name || old?.artifact.server || '', duration: data.execution_duration_ms, status: starts.has(frame.type) ? 'running' : failed ? 'failed' : 'completed' },
     ...(!starts.has(frame.type) ? { result: failed ? data.error ?? data.failure ?? 'The tool failed.' : data.result ?? data.output ?? null, isError: failed } : {}),
   };
